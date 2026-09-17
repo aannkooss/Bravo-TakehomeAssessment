@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using PartsInventory.Api.Data;
+using PartsInventory.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -8,6 +9,9 @@ var builder = WebApplication.CreateBuilder(args);
 var connectionString = builder.Configuration.GetConnectionString("Default")
     ?? "Data Source=partsinventory.db";
 builder.Services.AddDbContext<AppDbContext>(options => options.UseSqlite(connectionString));
+
+// Scoped: shares the request-scoped, non-thread-safe AppDbContext lifetime.
+builder.Services.AddScoped<IPartService, PartService>();
 
 var app = builder.Build();
 
