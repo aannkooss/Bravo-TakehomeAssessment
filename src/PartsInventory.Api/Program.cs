@@ -1,4 +1,5 @@
 using FluentValidation;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
 using PartsInventory.Api.Data;
 using PartsInventory.Api.Endpoints;
@@ -25,6 +26,10 @@ builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 
 builder.Services.AddOpenApi();
 
+// Liveness = process is up; readiness = process up AND the database is reachable.
+builder.Services.AddHealthChecks()
+    .AddDbContextCheck<AppDbContext>(name: "database", tags: ["ready"]);
+
 var app = builder.Build();
 
 // Apply migrations at startup so the SQLite schema exists on a fresh container/volume.
@@ -40,6 +45,10 @@ app.MapOpenApi();
 
 app.MapGet("/", () => "Parts Inventory API");
 app.MapPartsEndpoints();
+
+// Liveness: no dependency checks, just "is the app running". Readiness: includes the DbContext check.
+app.MapHealthChecks("/health", new HealthCheckOptions { Predicate = _ => false });
+app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = check => check.Tags.Contains("ready") });
 
 app.Run();
 

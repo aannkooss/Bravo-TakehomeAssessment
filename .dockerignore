@@ -1,0 +1,19 @@
+# Keep build context small and free of build output, VCS, secrets, and local DBs.
+**/bin/
+**/obj/
+**/.git/
+**/.gitignore
+**/.vs/
+**/.vscode/
+**/.idea/
+**/*.user
+**/*.db
+**/*.db-shm
+**/*.db-wal
+**/appsettings.*.Local.json
+**/.env
+**/*.pfx
+**/*.key
+docs/
+tests/
+README.md
