@@ -78,33 +78,53 @@ public class PartService : IPartService
         return true;
     }
 
+    /// <summary>Maximum optimistic-concurrency retries before giving up (surfaces as a 500).</summary>
+    private const int MaxConcurrencyRetries = 10;
+
     public async Task<AddTransactionResult> AddTransactionAsync(int id, CreateTransactionRequest request, CancellationToken ct)
     {
-        // NOTE: Checkpoint 2 implements the straightforward read-modify-write. The optimistic
-        // concurrency retry loop (RowVersion) is added in Checkpoint 4 so concurrent decrements
-        // cannot oversell or lose updates.
-        var part = await _db.Parts.FirstOrDefaultAsync(p => p.Id == id, ct);
-        if (part is null)
-            return new AddTransactionResult(TransactionOutcome.PartNotFound, null, 0);
-
-        var newQuantity = part.Quantity + request.QuantityChange;
-        if (newQuantity < 0)
-            return new AddTransactionResult(TransactionOutcome.WouldGoNegative, null, part.Quantity);
-
-        var tx = new StockTransaction
+        // Optimistic concurrency: each attempt re-reads the part (fresh Quantity + RowVersion),
+        // re-checks the negative-quantity rule, then saves. EF emits
+        //   UPDATE Parts SET ... WHERE Id = @id AND RowVersion = @original
+        // so a racing writer that already moved the token affects 0 rows and we get a
+        // DbUpdateConcurrencyException -> we clear the tracker and retry against fresh state.
+        // This is what prevents lost updates (100 concurrent -1s land at 0, never 97) and,
+        // combined with the re-check on fresh data, prevents overselling below zero.
+        for (var attempt = 1; ; attempt++)
         {
-            PartId = part.Id,
-            QuantityChange = request.QuantityChange,
-            Reason = request.Reason,
-            TimestampUtc = DateTime.UtcNow
-        };
+            // Query filter applies: a soft-deleted part reads as null -> PartNotFound (cannot accept stock).
+            var part = await _db.Parts.FirstOrDefaultAsync(p => p.Id == id, ct);
+            if (part is null)
+                return new AddTransactionResult(TransactionOutcome.PartNotFound, null, 0);
 
-        part.Quantity = newQuantity;
-        part.RowVersion = Guid.NewGuid();
-        _db.Transactions.Add(tx);
-        await _db.SaveChangesAsync(ct);
+            var newQuantity = part.Quantity + request.QuantityChange;
+            if (newQuantity < 0)
+                return new AddTransactionResult(TransactionOutcome.WouldGoNegative, null, part.Quantity);
 
-        return new AddTransactionResult(TransactionOutcome.Success, ToResponse(tx), part.Quantity);
+            var tx = new StockTransaction
+            {
+                PartId = part.Id,
+                QuantityChange = request.QuantityChange,
+                Reason = request.Reason,
+                TimestampUtc = DateTime.UtcNow
+            };
+
+            part.Quantity = newQuantity;
+            part.RowVersion = Guid.NewGuid();
+            _db.Transactions.Add(tx);
+
+            try
+            {
+                await _db.SaveChangesAsync(ct);
+                return new AddTransactionResult(TransactionOutcome.Success, ToResponse(tx), part.Quantity);
+            }
+            catch (DbUpdateConcurrencyException) when (attempt < MaxConcurrencyRetries)
+            {
+                // Another writer won this round. Detach our stale part + pending transaction
+                // so the next iteration reads current values and inserts exactly once.
+                _db.ChangeTracker.Clear();
+            }
+        }
     }
 
     public async Task<IReadOnlyList<TransactionResponse>?> GetTransactionsAsync(int id, CancellationToken ct)
