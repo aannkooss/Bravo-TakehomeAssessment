@@ -1,34 +1,11 @@
-# Part 3b — Research Task
+# Part 3b — Research: Optimistic Concurrency in EF Core
 
-> ⚠️ **WRITE THIS IN YOUR OWN WORDS (~250 words).** Pick ONE topic your API actually touches. The
-> scaffold below is a checklist of what must be present — fill each section yourself, open the docs,
-> and record the date you accessed them. The graders **will** open your links.
+EF Core implements optimistic concurrency by assuming that conflicts are rare and takes no locks. Instead, it arranges for a save to fail if the row changed since it was read. A new property is configured as a concurrency token which is tracked and loaded by EF. On `SaveChanges`, it adds the token to an `UPDATE ... WHERE` clause that compares the original value it read against the database. If a concurrent write already moved the token, the `UPDATE` matches zero rows and EF throws a `DbUpdateConcurrencyException`.
 
-**Suggested topic (your API uses all four; this is the strongest fit):**
-**Optimistic concurrency for a read-modify-write update in EF Core** — because your stock path
-(`PartService.AddTransactionAsync`) implements exactly this with a `RowVersion` token + retry.
+In my API, this protects the stock-decrement path. I mark a `Guid RowVersion` with `IsConcurrencyToken()` (`AppDbContext.cs:34`, `Part.cs:33`) and regenerate it on every new save. Then I wrap `AddTransactionAsync()` in a retry loop that catches the exception, clears the tracker, re-reads the quantity, checks the rule, and retries again. Managing the token manually gives me the freedom to control when a conflict happens.
 
-_(Alternative topics you could pick instead: global exception handling/ProblemDetails; validation in
-Minimal APIs on .NET 10; containerizing with chiseled/non-root images. All are in your repo.)_
+One big nuance I found was actually a provider difference, not a .NET version one. The docs show the timestamp and row version token maps to a SQL Server `rowversion` column that auto updates, but they state plainly that some providers do not have this native type, like SQLite. Instead of a database-generated `rowversion`, the documents suggest an application-managed token via `[ConcurrencyCheck]`/`IsConcurrencyToken()`, which was the approach that I went with.
 
-Your ~250 words **must** include:
+One thing that surprised me was that the most common pattern, being `byte[] [Timestamp]` rowversion, actually does nothing on SQLite. The column never actually auto-updates which causes the concurrency check to not occur. This also results in code that looks functionally correct but does not deliver what it promises. I was able to catch this by reading the "Native database-generated concurrency tokens" section and reasoning about the generated SQL, and then switched to the `Guid` token.
 
-**(a) Exact documentation URL(s) + access date.**
-- e.g. Microsoft Learn "Handling concurrency conflicts" (EF Core) — paste the exact URL you used.
-- Accessed: _(YYYY-MM-DD)_.
-
-**(b) Specific API / method / attribute names.**
-- e.g. `IsConcurrencyToken()`, `[ConcurrencyCheck]`, `[Timestamp]`/`IsRowVersion()`,
-  `DbUpdateConcurrencyException`, `entry.OriginalValues`/`GetDatabaseValues()`.
-
-**(c) What changed between .NET versions.**
-- e.g. how the guidance/APIs evolved, and — important for your write-up — **why SQL Server's
-  `rowversion`/`[Timestamp]` pattern doesn't work on SQLite**, which is why your code uses an
-  app-managed `Guid` token instead. _(Your words.)_
-
-**(d) One thing that surprised you / where AI's first answer was wrong, and how you found out.**
-- You have a real one: the first instinct was a `byte[]` rowversion; SQLite has no native
-  auto-updating rowversion, so it silently never triggers. You found out by checking the docs /
-  reasoning about the generated SQL. (See `Part4/AI-LOG.md` Entry 1.) _(Write this in your own words.)_
-
-Prefer primary sources (Microsoft Learn, the library's own docs).
+*Source: Microsoft Learn, "Handling Concurrency Conflicts – EF Core," https://learn.microsoft.com/en-us/ef/core/saving/concurrency?tabs=data-annotations (last updated 2025-10-30; accessed September 20, 2026).*

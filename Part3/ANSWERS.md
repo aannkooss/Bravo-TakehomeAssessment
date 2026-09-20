@@ -1,47 +1,15 @@
 # Part 3a — Written Answers
 
-> ⚠️ **WRITE THIS IN YOUR OWN WORDS.** The README grades Part 3 as evidence *you* understand your
-> repo — do not paste AI text. The scaffolding and file/line pointers below are here so you know
-> exactly what to talk about; replace every _(your words)_ block with your own explanation. Verify
-> the line numbers still match before submitting (they were captured at the final commit).
-
 ## 1. Value types vs. reference types — and predict the output
 
 **Predicted output:** `Washer`
 
-_(Your words, 3–6 sentences.)_ Explain: `Part` is a `class`, so it's a **reference type**; `a` and
-`b` hold references to the **same** object on the heap, so `b.Name = "Washer"` mutates the one object
-`a` also points at. Contrast with a value type (`struct`/`int`), where `b = a` copies the value and the
-two are independent. Mention where the reference lives vs. where the object lives.
+A value type like an `int`, `char`, `bool` directly hold data. For example, assigning a value to a variable like `b = a` copies the value creating two independent copies. A reference type like a class holds a reference as a pointer to an object. For example, when assigning `b = a`, the reference is now copied, so both variables point at the same object. In the code example, Part is a reference type since it is a class. When `b = a`, `b` and `a` both point at one object, `b.Name = "Washer"` changes the object and `a.Name` reads that object. Therefore, the output will print `Washer` because a and b reference the same object and `b.Name = "Washer"` mutated it. If Part were a value type instead, then b = a would copy the entire value making `a` and `b` independent - `b.Name` would never know what `a` is and the output would be `Bolt`
 
 ## 2. `IEnumerable<T>` vs `IQueryable<T>` and why it matters for EF Core
 
-_(Your words.)_ Core idea: `IQueryable<T>` builds an **expression tree** the provider translates to
-SQL, so `Where`/`Skip`/`Take` run **in the database**; `IEnumerable<T>` is in-memory LINQ-to-Objects,
-so composing on it after materialising pulls rows into the app first.
-
-**Where it mattered in my code:** `src/PartsInventory.Api/Services/PartService.cs:18-26`
-(`GetPartsAsync`). `var query = _db.Parts.AsNoTracking().OrderBy(...)` is `IQueryable`; the `Skip`/
-`Take`/`Select` at lines 22-26 compose into **one SQL query** with paging done by the database. If I
-had called `.ToList()` at line 18 first, everything after would be `IEnumerable` and I'd be paging the
-whole table in memory (exactly the bug in the Part 2 legacy `GetLowStock`). _(Add a sentence in your
-own words on the performance consequence.)_
+`IQueryable<T>` carries an expression tree that the EF Core translates to SQL which then executes in the database. `IEnumerable<T>` uses in-memory iteration which means it runs in the app. One example of where this occurs in my code was in `src/PartsInventory.Api/Services/PartService.cs:18-26` Line 18, `var query = _db.Parts.AsNoTracking().OrderBy(p => p.Id);` is IQueryable as well as lines 22-26, `.Skip(...).Take(...).Select(...).ToListAsync(ct)`. If line 18 were to end in `.ToList()`, everything after would be IEnumerable and we would bring it into memory. This matters for EF Core performance because if you materialize too early, you pull the entire table into memory and start filtering there which wastes the database's indexes and bandwidth.
 
 ## 3. The life of an HTTP request through *my* pipeline
-
-_(Your words.)_ Walk a real request (e.g. `POST /api/parts`) through **my** registration order in
-`src/PartsInventory.Api/Program.cs`:
-
-- `app.UseExceptionHandler()` — `Program.cs:42` — wraps everything so any unhandled exception becomes
-  one `ProblemDetails`.
-- `app.MapOpenApi()` — `Program.cs:44`.
-- Endpoint routing to `MapPartsEndpoints()` — `Program.cs:47` → the route group in
-  `Endpoints/PartsEndpoints.cs`.
-- For `POST`/`PUT`/transactions, the **endpoint filter** `ValidationFilter<T>` runs *before* the
-  handler (`Validation/ValidationFilter.cs`) — on failure it short-circuits with
-  `ValidationProblemDetails`.
-- The handler calls the Scoped `IPartService`, which hits the DB; the response is a DTO.
-- Health endpoints are mapped at `Program.cs:50-51`.
-
-_(Explain in your own words why `UseExceptionHandler` is registered first, and what the validation
-filter does to the request before your handler sees it.)_
+ 
+ A `POST /api/parts` enters through `UseExceptionHandler` (`Program.cs:42`), which is registered first because middleware nests in the order it is added — so it wraps the whole pipeline and anything downstream that throws is logged server-side with a `traceId` and returned as one `ProblemDetails`. The request is then routed to the create-part endpoint via `MapPartsEndpoints()` (`Program.cs:47`). The `ValidationFilter<CreatePartRequest>` (`Validation/ValidationFilter.cs`) runs after model binding and returns a 400 `ValidationProblemDetails` if the model is invalid. If valid, the handler calls the Scoped `IPartService` (`Program.cs:18`) into `AppDbContext` into `SQLite` and returns a `PartResponse` DTO with 201 + Location. Finally, the response leaves back through this pipeline.
