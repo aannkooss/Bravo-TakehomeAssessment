@@ -23,7 +23,7 @@ Some files I'd change:
 - `AppDbContext.cs:38` and `:54` - reemove both global query filters; with no IsActive there's nothing to filter. The FK is already OnDelete(DeleteBheavior.Cascade), so removing a part cascade-deletes its transactions automatically. 
 - `Domain/Part.cs:23` - remove the IsActive property
 - `Dtos/PartDtos.cs:10` - remove the IsActive field from PartResponse
-- `IPartService.cs:148` (ToResponse) and `:46` (CreateAsync) stop mapping/setting it
+- `PartService.cs:148` (ToResponse) and `:46` (CreateAsync) stop mapping/setting it
 - `IPartService.cs:34` - update method name / summary (SoftDeleteAsync to DeleteAsync)
 - Tests: `BusinessRuleTests` asserts part.`IsActive` on create, so would need updating. 
 
