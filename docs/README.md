@@ -267,18 +267,18 @@ Question 6 is not a trap. In previous rounds, the candidates who scored highest 
 
 ## Submission checklist
 
-* [ ] Part 1 API builds and runs; README has accurate run instructions
-* [ ] `Part1/DECISIONS.md` with all six justifications
-* [ ] OpenAPI advertises your real response types and status codes
-* [ ] Validation runs in the pipeline; one consistent `ValidationProblemDetails` shape
-* [ ] Concurrency handled on the transactions endpoint — or documented honestly in the README
-* [ ] Separate test project with a real `<ProjectReference>` that builds standalone; `dotnet test` passes
-* [ ] HTTP-layer test, concurrency test, pagination edge-case tests, and business-rule tests all present
-* [ ] Container image builds and runs; README has the build + run commands
-* [ ] `.dockerignore` present; no secrets baked into the image
-* [ ] `Part2/CODE-REVIEW.md` with findings + corrected code (fenced, and check it renders)
-* [ ] `Part3/ANSWERS.md` in your own words, with file/line references where asked
-* [ ] `Part3/RESEARCH.md` with cited URLs and access date
-* [ ] `Part4/AI-LOG.md` (with commit SHAs), `SKILL.md`, `AGENT-PLAN.md`
-* [ ] `Part5/DEFENSE.md` with file and line numbers throughout, committed last
-* [ ] Meaningful Git commit history (not one giant "final" commit)
+* [x] Part 1 API builds and runs; README has accurate run instructions
+* [x] `Part1/DECISIONS.md` with all six justifications
+* [x] OpenAPI advertises your real response types and status codes
+* [x] Validation runs in the pipeline; one consistent `ValidationProblemDetails` shape
+* [x] Concurrency handled on the transactions endpoint — or documented honestly in the README
+* [x] Separate test project with a real `<ProjectReference>` that builds standalone; `dotnet test` passes
+* [x] HTTP-layer test, concurrency test, pagination edge-case tests, and business-rule tests all present
+* [x] Container image builds and runs; README has the build + run commands
+* [x] `.dockerignore` present; no secrets baked into the image
+* [x] `Part2/CODE-REVIEW.md` with findings + corrected code (fenced, and check it renders)
+* [x] `Part3/ANSWERS.md` in your own words, with file/line references where asked
+* [x] `Part3/RESEARCH.md` with cited URLs and access date
+* [x] `Part4/AI-LOG.md` (with commit SHAs), `SKILL.md`, `AGENT-PLAN.md`
+* [x] `Part5/DEFENSE.md` with file and line numbers throughout, committed last
+* [x] Meaningful Git commit history (not one giant "final" commit)
