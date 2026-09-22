@@ -1,10 +1,5 @@
 # Part 5 — Code Defense
 
-> ⚠️ **WRITE THIS IN YOUR OWN WORDS, AND WRITE IT LAST.** The README wants this committed on its own
-> **after the code is final** so the line numbers still match. Every answer must name the file + line
-> numbers. The pointers below are accurate as of the current commit — **re-verify them right before
-> you write**, because any later edit shifts lines. Replace each _(your words)_ block.
-
 ## 1. Walk the stock-transaction path line by line
 **File:** `src/PartsInventory.Api/Services/PartService.cs:84-128` (`AddTransactionAsync`). 
     
