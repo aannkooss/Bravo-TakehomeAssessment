@@ -6,60 +6,34 @@
 > you write**, because any later edit shifts lines. Replace each _(your words)_ block.
 
 ## 1. Walk the stock-transaction path line by line
-**File:** `src/PartsInventory.Api/Services/PartService.cs:84-128` (`AddTransactionAsync`).
-_(Your words — go line by line.)_ Key lines to cover:
-- `:93` the `for` retry loop wraps the whole read-modify-write.
-- `:96-98` re-read the part each attempt (query filter → soft-deleted reads as null → `PartNotFound`).
-- `:100-102` compute `newQuantity` and reject if it would go below zero (**the negative-quantity rule
-  lives here**, not in a validator — say why).
-- `:104-114` build the `StockTransaction`, set new `Quantity`, **regenerate `RowVersion` at :113**.
-- `:118` `SaveChangesAsync`; `:121-125` catch `DbUpdateConcurrencyException`, clear the tracker, retry.
-Explain **why the order matters** (re-check must be on fresh data; token regen before save). If any
-line came from AI and you kept it, say which (e.g. the `RootContextData`/token idea) and why.
+**File:** `src/PartsInventory.Api/Services/PartService.cs:84-128` (`AddTransactionAsync`). 
+    
+`Line 96` reads the part fresh from the database on every attempt. This is placed inside the loop so that a retry works on the current quantity and rowVersion rather than an older value - It stays up to date. Since there is also a global query filter, a soft-deleted part returns a null value which then transitions into `lines 97-98`. These check if the part is null, and if it is true then the program returns a 404 PartNotFound error. Next, `line 100` computes the new quantity and stores it in a newQuantity variable using the part.Quantity and request.QuantityChange properties. Next, the system checks if the newQuantity < 0, which returns WouldGoNegative before writing anything. We then build the log for the stockTransaction from `lines 104-114`. This is a record of the partID, timestamp, change in quantity, and the request to change. part.RowVersion is regenerate with a new GUID, and the transaction is added. This token is also regenerated before the next save. On `Line 118`, because RowVersion is a concurrency token, EF emits UPDATE Parts SET ... WHERE ID = @id AND RowVersion = @original. Basically, if nobody raced me, only one row is affected and the DTO as well as new quantity is returned.  `Lines 121-125` handle the event that if a concurrent writer already moved the token, then the UPDATE query affects zero rows and EF throws a DbUpdateConcurrencyException. The loop then retries against the original state once this gets caught and _db.ChangeTracker.Clear() is called. This also happens to eb the line that I kept from AI. After a failed save, the stale part and the added StockTransaction are still tracked, so in order to properly handle this, we need to clear the old values which gives us exactly one insert.
+
 
 ## 2. The concurrency question — two clerks sell the last unit
-_(Your words.)_ Trace it with line numbers:
-- Both read `Quantity` at `:96` with the same `RowVersion`.
-- Clerk A saves first at `:118`; EF's `UPDATE ... WHERE RowVersion=@original`
-  (config at `Data/AppDbContext.cs:34`, token field `Domain/Part.cs:33`) succeeds and moves the token.
-- Clerk B's save at `:118` matches **0 rows** → `DbUpdateConcurrencyException` at `:121` → retry →
-  re-reads fresh `Quantity` at `:96` → the `:100-102` check now rejects if none left.
-**Does it prevent overselling?** Yes — name the mechanism (optimistic concurrency token + re-check on
-retry). State it plainly in your own words. (Verified: `ConcurrencyTests` — 100×`-1` from 100 → 0.)
+In the event that two clerks sell the last unit, both systems will receive separate HTTP requests from the clerks, the system then goes to read line `96` - A and B each load their parts independently and see the same quantity and rowVersion, for example, quantity 1 and RowVersion T=0. They both compute the negative check `(:100-102)` which comes back as `newQuantity = 1 + (-1) =0 => 0 < 0` which is false, so neither request gets rejected yet. They both proceed to the next step since, at this point, nothing flags an issue. Once this happens, they both set the quantity to 0 `(:112-113)` and regenerate the RowVersion to a new GUID (A becomes T_A, B becomes T_B). Now, lets say clerk A saves first, EF runs the UDPATE query and since the token still matches (T_A), only one row is affected and the process succeeds and the quantity becomes 0. Now, when clerk B saves and the UPDATE query is ran, the RowVersion (T=0) does not match the one that is stored (T_A), so the WHERE clause does not find any matches across any rows and throws the DbUpdateConcurrencyException error. Clerk B retries, catches the exception, calls ChangeTracker.Clear(), loops, and re-reads fresh. It now reads that Quantity is 0 and the RowVersion is still T_A, and B gets rejected again. Now when the newQuantity is computed, it has a value of -1 and since -1 < 0 is true, it returns WouldGoNegative and the endpoint responds 400. This does prevent overselling since, in each transaction, only one unit is sold and there is no risk of selling more than what is on hand. 
 
 ## 3. Soft delete — every place that checks `IsActive`
-List with line numbers (verify before submitting):
-- `Data/AppDbContext.cs:38` — global query filter on `Part` (`p => p.IsActive`).
-- `Data/AppDbContext.cs:54` — matching filter on `StockTransaction` (`t.Part!.IsActive`).
-- `Services/PartService.cs:75` — `SoftDeleteAsync` sets `IsActive = false`.
-- `Services/PartService.cs:46` — `CreateAsync` sets `IsActive = true`.
-- `Domain/Part.cs:23` — default `true`.
-_(Your words.)_ Is there any path that can still touch a deleted part? Consider: the filters apply to
-all LINQ queries, but `IgnoreQueryFilters()` (not used) or raw SQL would bypass them. State whether any
-such path exists in your code (it doesn't — but say so and why).
+Soft delete in my code is not enforced by any endpoint checks, and it is instead centralized in two global query filters. Every read excludes deleted parts. IsActive can be found in a couple spots throughout my code. Where its checked and enforced is in `AppDbContext.cs:38: part.HasQueryFilter(p => p.IsActive)`. This filter is applied to every Parts Query in the app and so a soft deleted part is invisible to list, get-by-id, update, soft-delete, and add-transcation without any methods writing an explicit check. Further down, on line `:54`, `tx.HasQueryFilter(t => t.Part!.IsActive)`. The matching filter on StockTransaction, so a deleted part's transaction history is excluded too. Moving on to where its set, It occurs on `Part.cs:23 public bool IsActive { get; set; } = true;`, `PartService.cs:46` CreateAsync set IsActive to true, and `PartService.cs:75` SoftDelete Async sets IsActive to false. Lastly, it is exposed in `PartDtos.cs:10` the IsActive field on PartResponse and finally, `PartService.cs:148` where ToResponse maps it into the DTO. No path in the current code can still touch a deleted part since two filters apply to all LINQ queries, every read in PartsService = GetPartsAsync, GetByIdAsync, etc. implicitly exclude all deleted parts, so they return 404 /empty. The only ways to bypass a global query filter are IgnoreQueryFilters() or raw SQL, and neither are used anywhere in the codebase. This assures there is no live path that touches a soft deleted part.
 
 ## 4. The requirement change — switch to hard delete
-_(Your words.)_ Files you'd change and how:
-- `Services/PartService.cs` — `SoftDeleteAsync` (`:71-78`) becomes a real `Remove` + `SaveChanges`.
-- `Data/AppDbContext.cs` — remove the two query filters (`:38`, `:54`); rely on the existing FK
-  **cascade delete** (`:48-51`) so a part's transactions go with it.
-- `Domain/Part.cs` — `IsActive` (`:23`) and its DTO field become unnecessary; a migration drops the column.
-Address: **existing transaction history** (cascade-deleted — call out the audit-trail loss),
-**delete idempotency** (a second delete now 404s instead of being a no-op), and **SKU reuse** (a hard
-delete frees the SKU for reuse; soft delete keeps it occupied — the unique index still sees it).
+Some files I'd change:  
+- `PartService.cs:71-78` - SoftDeleteAsync becomes a real delete: read the part, then _db_Parts.Remove(part) + SaveChangesAsync instead of setting IsActive = false (:75). I would rename it DeleteAsync
+- `AppDbContext.cs:38` and `:54` - reemove both global query filters; with no IsActive there's nothing to filter. The FK is already OnDelete(DeleteBheavior.Cascade), so removing a part cascade-deletes its transactions automatically. 
+- `Domain/Part.cs:23` - remove the IsActive property
+- `Dtos/PartDtos.cs:10` - remove the IsActive field from PartResponse
+- `IPartService.cs:148` (ToResponse) and `:46` (CreateAsync) stop mapping/setting it
+- `IPartService.cs:34` - update method name / summary (SoftDeleteAsync to DeleteAsync)
+- Tests: `BusinessRuleTests` asserts part.`IsActive` on create, so would need updating. 
+
+What happens to existing transaction history: For the existing transaction history, because the DK is OnDelete(Cascade), hard-deleting a part permanently deletes all its StockTransaction rows and the audit trail is gone. If we wanted to preserve the history, then FK would have to be changed to Restrict/SetNull or archive them before deleting. That is the primary downside to hard deleting in this system.  
+Deleting Impodency: Behavior is still similar to today from the client's view, first DELETE (return 204), second DELETE (return 404). THe difference is that with soft delete, the row still physically existed. With hard delete, its entirely gone. A stricter idempotent design would return 204 on the repeat too, but I return 404 because the part no longer exists.  
+SKU reuse: When it comes to reusing a SKU number, the hard delete fixes an inconsistency. Under soft delete, a deleted part's row physically remains, so its SKU still holds the value for a specific index. SkuExistAsync queries through the IsActive filter, so it reports the SKU as free. That mismatch means creating a new part with a deleted part's SKU pases validation but then violates its unique index. With a hard delete, the row is entirely removed so the SKU is free to be reused.
 
 ## 5. Argue against yourself (DECISIONS Q1)
-_(Your words.)_ Make the strongest case **for controllers** (the option you rejected): built-in model
-binding/validation conventions, `[ApiController]` behaviors, filters, familiarity, API versioning at
-scale, easier for a large team. Then state what would have to be true for you to switch (e.g. the
-surface grows past ~a dozen resources, or the team already standardises on MVC).
-
+In DECISIONS Q1, I chose Minimal APIs. The strongest case for the option I rejected controllers was that convention-based validaton and error handling come for free. With [ApiController], invalid model state automatically returns a 400 ValidationProblemDetails without me needing to hook up an endpoint filter at all. My Minimal API build had to add a custom validation filter to get the same behavior, whereas controllers would have given that to me out of the box. Next, as an API grows into something large and scalable, grouping related actions in controller classes with attribute routing keeps things organized, Minimal APIs can spread out into many MapX registrations. My 7 endpoints fit in one file now, but when the application grows and requires 50+ endpoints across 10 resources, then controllers would be the better option. Next, actionfilters, authorization filters, and result filters compose cleanly into the MVC pipeline which are usfull once auth, rate-limiting, and per-action policies are considered. Controllers are also the most common pattern that .NET developers are familiar with for more complex builds. Minimal APis are more useful for smaller teams that require faster onboarding. For me to consider controllers over Minimal APIs, the surface would have had to be massive, having dozens more endpoints across many resoures. Things like having heavier features, and complex model binding. Another point is if the team is already standardized on MVC. These are cases when controllers would be considered over Minimal APIs.
 ## 6. What is weakest
-_(Your words — be honest, this scores well.)_ Candid options grounded in the code:
-- The `RowVersion` token is **app-managed** (regenerated in code) rather than a DB-native rowversion,
-  because SQLite has none — on SQL Server I'd use `IsRowVersion()`. Under pathological contention the
-  retry loop (`PartService.cs:82` max 10) could exhaust and surface a 500.
-- `MaxLength` isn't enforced by SQLite at the DB layer (only by validation).
-Name **one line/block an AI wrote that you didn't fully understand at first** and what you did about it
-(e.g. `ValidationFilter.cs` RootContextData, or `ChangeTracker.Clear()` at `PartService.cs:125`) — and
-what you'd do with two more hours.
+One part that I'm least confident about is an inconsistency in how soft delete interacts with SKU uniqueness. SkuExistsAsync (PartService.cs) queries through IsActive global query filter, so it only sees active parts, while the unique index on teh Sku sees the present soft deleted row. If i soft-delete a part and then try to create a new one with the same SaveChanges as a unique-constraint violation, which surfaces as an unhandled 500 instead of a clean 400, then it becomes an edge case that I havent created a test for, and then becomes a big risk in production.  
+With two more hours for this project, I would be able to close that gap and either make SkuExists Async bypass the filter with IgnoreQueryFilters() so it also sees  soft-deleted rows, or catch the unique constraint DbUpdateException in CreateAsync and translate it into the same ValidationProblemDetails 400 that the validator returns. Then, I'd add an integration test for "create with a soft-deleted part's SKU." and make the concurrency retry loop return a 409 Conflict instead of a 500 if it uses up its 10 attempts and add a note on SQL server I'd replace the app-managed Guid token with a native rowversion.  
+An AI line I didnt fully understand at first was _db.ChangeTracker.Clear() in PartService.cs:125. On the first read I could not make sense of why it was needed and assumed that a failed SaveChanges would leave the context clean. What I did was trace it and realize that after a DbUpdateConcurrencyException, my stale part and the already-added StockTransaction are still tracked, so without clearing them the retry would re-check the stale values and try to insert the transaction twice. I confirmed my understanding by running the concurrency test - 100 concurrent -1 ended at exactly 0 with 100 transactions. This proved there was no double insert
